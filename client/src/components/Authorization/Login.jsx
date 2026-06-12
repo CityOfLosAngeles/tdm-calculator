@@ -7,6 +7,7 @@ import * as Yup from "yup";
 import * as accountService from "../../services/account.service";
 import Button from "../Button/Button";
 import ContentContainer from "../Layout/ContentContainer";
+import angelenoAccountButton from "../../images/angeleno-account-button-light.svg";
 
 const useStyles = createUseStyles(theme => ({
   warningText: {
@@ -25,6 +26,31 @@ const useStyles = createUseStyles(theme => ({
     gap: "12px",
     justifyContent: "center",
     margin: "16px auto"
+  },
+  angelenoAccountSignIn: {
+    alignItems: "center",
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px"
+  },
+  angelenoAccountButton: {
+    background: "transparent",
+    border: 0,
+    cursor: "pointer",
+    minHeight: "46px",
+    minWidth: "258px",
+    padding: 0,
+    width: "258px"
+  },
+  angelenoAccountButtonImage: {
+    display: "block",
+    height: "auto",
+    width: "258px"
+  },
+  angelenoAccountTagline: {
+    ...theme.typography.paragraph1,
+    margin: 0,
+    textAlign: "center"
   },
   divider: {
     alignItems: "center",
@@ -182,14 +208,24 @@ const Login = () => {
           >
             Sign in with Google SSO (City staff)
           </Button>
-          <Button
-            id="cy-login-angeleno"
-            type="button"
-            variant="primary"
-            onClick={handleAngelenoLogin}
-          >
-            Sign in with Angeleno Account (external users)
-          </Button>
+          <div className={classes.angelenoAccountSignIn}>
+            <button
+              aria-label="Sign in with Angeleno Account"
+              className={classes.angelenoAccountButton}
+              id="cy-login-angeleno"
+              type="button"
+              onClick={handleAngelenoLogin}
+            >
+              <img
+                alt="Sign in with Angeleno Account"
+                className={classes.angelenoAccountButtonImage}
+                src={angelenoAccountButton}
+              />
+            </button>
+            <p className={classes.angelenoAccountTagline}>
+              Your one account to access City of Los Angeles services.
+            </p>
+          </div>
         </div>
         <div className={classes.divider}>or sign in with TDM credentials</div>
         <Formik

@@ -42,6 +42,7 @@ router.get("/google/login", accountController.googleLogin);
 router.get("/google/demo", accountController.googleDemo);
 router.post("/google/demo/continue", accountController.googleDemoContinue);
 router.get("/google/callback", accountController.googleCallback);
+router.post("/google/saml/acs", accountController.googleSamlAcs);
 router.post(
   "/login/:email?",
   loginLimiter,

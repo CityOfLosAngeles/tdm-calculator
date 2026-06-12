@@ -1,6 +1,7 @@
 const accountService = require("../services/account.service");
 const angelenoAuthService = require("../services/angeleno-auth.service");
 const googleAuthService = require("../services/google-auth.service");
+const googleSamlAuthService = require("../services/google-saml-auth.service");
 const jwtSession = require("../../middleware/jwt-session");
 const {
   validate,
@@ -379,7 +380,7 @@ const renderAngelenoDemoPage = ({
 <body>
   <main>
     <div class="brand">Angeleno Account</div>
-    <div class="tagline">Demo unified sign-in experience for City services.</div>
+    <div class="tagline">Your one account to access City of Los Angeles services.</div>
     ${errorHtml}
     <form method="post" action="/api/accounts/angeleno/demo/continue">
       <input type="hidden" name="state" value="${escapeHtml(state)}" />
@@ -481,6 +482,23 @@ const angelenoDemoContinue = async (req, res) => {
 
 const googleLogin = async (req, res) => {
   try {
+    if (googleSamlAuthService.isEnabled()) {
+      const { authorizationUrl, state } =
+        await googleSamlAuthService.createLoginRequest(req.query.redirect);
+
+      res.cookie(
+        "google_saml_state",
+        googleSamlAuthService.encodeStateCookie(state),
+        {
+          httpOnly: true,
+          maxAge: 10 * 60 * 1000,
+          sameSite: "lax"
+        }
+      );
+      res.redirect(authorizationUrl);
+      return;
+    }
+
     if (googleAuthService.isDemoMode()) {
       const { authorizationUrl, state } =
         googleAuthService.createDemoLoginRequest(req.query.redirect);
@@ -512,7 +530,10 @@ const googleLogin = async (req, res) => {
     );
     res.redirect(authorizationUrl);
   } catch (err) {
-    if (err.code === "GOOGLE_SSO_NOT_CONFIGURED") {
+    if (
+      err.code === "GOOGLE_SSO_NOT_CONFIGURED" ||
+      err.code === "GOOGLE_SAML_NOT_CONFIGURED"
+    ) {
       res.status(503).json({
         isSuccess: false,
         code: err.code,
@@ -520,6 +541,41 @@ const googleLogin = async (req, res) => {
       });
       return;
     }
+    res.status(500).json({ error: err.toString() });
+  }
+};
+
+const googleSamlAcs = async (req, res) => {
+  const stateCookie = googleSamlAuthService.decodeStateCookie(
+    req.cookies.google_saml_state
+  );
+  res.clearCookie("google_saml_state", { httpOnly: true });
+
+  try {
+    if (!googleSamlAuthService.isEnabled()) {
+      res.status(404).send("Not found");
+      return;
+    }
+    if (!stateCookie || stateCookie.state !== req.body.RelayState) {
+      res.status(401).send("Invalid Google SAML state");
+      return;
+    }
+    if (!req.body.SAMLResponse) {
+      res.status(400).send("Missing Google SAML response");
+      return;
+    }
+
+    const samlProfile = await googleSamlAuthService.validateResponse(req.body);
+    const profile = googleSamlAuthService.getUserProfile(samlProfile);
+    const authResult = await accountService.authenticateExternal(profile);
+    if (!authResult.isSuccess) {
+      res.status(403).json(authResult);
+      return;
+    }
+
+    await jwtSession.createSession(res, authResult.user);
+    redirectToCompletedGoogleLogin(res, stateCookie.redirectPath);
+  } catch (err) {
     res.status(500).json({ error: err.toString() });
   }
 };
@@ -955,6 +1011,7 @@ module.exports = {
   googleDemo,
   googleDemoContinue,
   googleCallback,
+  googleSamlAcs,
   put: [validate({ body: accountSchema }), put, validationErrorMiddleware],
   putRoles: [
     validate({ body: accountRoleSchema }),
