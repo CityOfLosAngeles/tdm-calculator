@@ -4,6 +4,7 @@ import { formatId } from "../../helpers/util";
 import { useNavigate } from "react-router-dom";
 import { createUseStyles, useTheme } from "react-jss";
 import UserContext from "../../contexts/UserContext";
+import CalculationsContext from "../../contexts/CalculationsContext";
 import { MdOutlineSearch } from "react-icons/md";
 import Pagination from "../UI/Pagination";
 import ContentContainerNoSidebar from "../Layout/ContentContainerNoSidebar";
@@ -59,7 +60,8 @@ const DEFAULT_FILTER_CRITERIA = {
   droList: [],
   adminNotesList: [],
   startDateModifiedAdmin: null,
-  endDateModifiedAdmin: null
+  endDateModifiedAdmin: null,
+  calculationIdList: []
 };
 
 const useStyles = createUseStyles(theme => ({
@@ -172,8 +174,8 @@ const useStyles = createUseStyles(theme => ({
     top: 0,
     zIndex: 1,
     fontWeight: "bold",
-    backgroundColor: theme.colors.secondary.darkNavy,
-    color: theme.colors.primary.white,
+    backgroundColor: theme.colorDarkNavy,
+    color: theme.colorWhite,
     "& th": {
       padding: "4px 12px"
     }
@@ -189,7 +191,7 @@ const useStyles = createUseStyles(theme => ({
     verticalAlign: "baseline"
   },
   tbody: {
-    background: theme.colors.primary.white,
+    background: theme.colorWhite,
     "& tr": {
       borderBottom: "1px solid #E7EBF0"
     },
@@ -302,6 +304,7 @@ const ProjectsPage = ({ contentContainerRef }) => {
   const isAdmin = userContext.account?.isAdmin || false;
   const loginId = userContext.account?.id || null;
   const isSubmittingSnapshot = useRef(false);
+  const calculations = useContext(CalculationsContext);
 
   useEffect(() => {
     fetchDroOptions(setDroOptions);
@@ -415,23 +418,28 @@ const ProjectsPage = ({ contentContainerRef }) => {
   });
 
   const handleCopyModalClose = async (action, newProjectName) => {
-    let newSelectedProject = { ...selectedProject };
     if (action === "ok") {
-      const projectFormInputsAsJson = JSON.parse(selectedProject.formInputs);
-      projectFormInputsAsJson.PROJECT_NAME = newProjectName;
-      if (!selectedProject.targetPoints) {
-        await projectResultService.populateTargetPoints(selectedProject);
-        newSelectedProject = await projectService.getById(selectedProject.id);
+      // When the pre-computed columns (targetPoints, earnedPoints and projectLevell)
+      // have not actually been pre-computed, we need to force their computation
+      // and
+      // store the result to the db  before proceeding.
+      if (!selectedProject.targetPoints && selectedProject.targetPoints !== 0) {
+        await projectResultService.populateTargetPoints(selectedProject.id);
       }
-      let newProject = {
-        ...newSelectedProject,
+      const projectFormInputsAsJson = {
+        ...JSON.parse(selectedProject.formInputs),
+        PROJECT_NAME: newProjectName
+      };
+      // Re-fetch project data, in case changes were made between the time the db
+      // was queried for projects and the execution of this operation.
+      const { data } = await projectService.getById(selectedProject.id);
+      const newProject = {
+        ...data,
         loginId: loginId,
         name: newProjectName,
+        description: data.description ?? "",
         formInputs: JSON.stringify(projectFormInputsAsJson)
       };
-      if (!newProject.description) {
-        newProject.description = "";
-      }
       try {
         await projectService.post(newProject);
         await updateProjects();
@@ -610,6 +618,9 @@ const ProjectsPage = ({ contentContainerRef }) => {
     setSelectAllChecked(!selectAllChecked);
   };
 
+  const getCalculationVersion = (p, calculations) =>
+    calculations?.[p.calculationId]?.version ?? "Beta";
+
   const ascCompareBy = (a, b, orderBy) => {
     let projectA, projectB;
 
@@ -650,6 +661,26 @@ const ProjectsPage = ({ contentContainerRef }) => {
     } else if (orderBy === "id") {
       projectA = a.id !== undefined && a.id !== null ? a.id : null;
       projectB = b.id !== undefined && b.id !== null ? b.id : null;
+    } else if (orderBy === "calculationId") {
+      const aVal = getCalculationVersion(a, calculations);
+      const bVal = getCalculationVersion(b, calculations);
+
+      if (aVal === bVal) return 0;
+
+      if (aVal === "Beta") return 1;
+      if (bVal === "Beta") return -1;
+
+      const aParts = String(aVal).split(".").map(Number);
+      const bParts = String(bVal).split(".").map(Number);
+
+      const len = Math.max(aParts.length, bParts.length);
+
+      for (let i = 0; i < len; i++) {
+        const diff = (aParts[i] ?? 0) - (bParts[i] ?? 0);
+        if (diff !== 0) return diff;
+      }
+
+      return 0;
     } else {
       projectA = a[orderBy] ? a[orderBy].toLowerCase() : "";
       projectB = b[orderBy] ? b[orderBy].toLowerCase() : "";
@@ -673,9 +704,15 @@ const ProjectsPage = ({ contentContainerRef }) => {
   };
 
   const getComparator = (order, orderBy) => {
-    return order === "asc"
-      ? (a, b) => ascCompareBy(a, b, orderBy)
-      : (a, b) => -ascCompareBy(a, b, orderBy);
+    return (a, b) => {
+      const result = ascCompareBy(a, b, orderBy);
+
+      if (orderBy === "calculationId") {
+        return order === "asc" ? -result : result;
+      }
+
+      return order === "asc" ? result : -result;
+    };
   };
 
   const setSort = (orderBy, order, isStatus = false) => {
@@ -786,6 +823,15 @@ const ProjectsPage = ({ contentContainerRef }) => {
     if (
       criteria.idFormattedList?.length > 0 &&
       !criteria.idFormattedList.includes(p.idFormatted)
+    ) {
+      return false;
+    }
+
+    if (
+      criteria.calculationIdList?.length > 0 &&
+      !criteria.calculationIdList.includes(
+        calculations?.[p.calculationId]?.version ?? "Beta"
+      )
     ) {
       return false;
     }
@@ -916,20 +962,26 @@ const ProjectsPage = ({ contentContainerRef }) => {
     {
       id: "checkAllProjects",
       label: (
-        <>
+        <div style={{ overflow: "visible" }}>
           <label htmlFor="SelectAllProject" className="sr-only">
             Select All Projects on Page
           </label>
           <input
             style={{
-              height: "15px"
+              position: "relative",
+              top: "0.2rem",
+              padding: "0",
+              height: "15px",
+              color: "white",
+              backgroundColor: "transparent",
+              border: "1px solid white"
             }}
             id="SelectAllProject"
             type="checkbox"
             checked={selectAllChecked}
             onChange={handleHeaderCheckbox}
           />
-        </>
+        </div>
       ),
       colWidth: "3rem"
     },
@@ -1032,7 +1084,7 @@ const ProjectsPage = ({ contentContainerRef }) => {
           {
             id: "calculationId",
             label: "Guidelines Version",
-            popupType: "text",
+            popupType: "version",
             accessor: "calculationId",
             colWidth: "10rem"
           }
@@ -1215,6 +1267,7 @@ const ProjectsPage = ({ contentContainerRef }) => {
                             setCheckedProjectIds={setCheckedProjectIds}
                             setSelectAllChecked={setSelectAllChecked}
                             droOptions={droOptions}
+                            calculations={calculations}
                           />
                         </th>
                       );
